@@ -28,6 +28,12 @@ class GameState {
       : numbers = [...numbers],
         _history = [[...numbers]];
 
+  GameState.fromHistory({required List<List<int>> history, required this.target})
+      : numbers = [...history.last],
+        _history = history.map((e) => [...e]).toList();
+
+  List<List<int>> get history => _history;
+
   // ── selection ────────────────────────────────────────────────────────
 
   int? get selectedA => selectedIndexA == null ? null : numbers[selectedIndexA!];

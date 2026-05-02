@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:math';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -13,21 +14,34 @@ void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   _prefs = await SharedPreferences.getInstance();
   for (final level in [3, 4, 5, 6]) {
-    _levelStreaks[level] = _prefs.getInt('streak_$level') ?? 0;
-    _levelHints[level]  = _prefs.getInt('hints_$level')  ?? initHints;
+    _levelStreaks[level]     = _prefs.getInt('streak_$level')      ?? 0;
+    _levelBestStreaks[level] = _prefs.getInt('best_streak_$level') ?? 0;
+    _levelHints[level]       = _prefs.getInt('hints_$level')       ?? initHints;
   }
   SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
   runApp(const NumForgeApp());
 }
 
+void _saveGame(int level, GameState gs) {
+  _prefs.setInt('game_target_$level', gs.target);
+  _prefs.setString('game_history_$level', jsonEncode(gs.history));
+}
+
+void _clearSavedGame(int level) {
+  _prefs.remove('game_target_$level');
+  _prefs.remove('game_history_$level');
+}
+
 void _saveLevel(int level) {
-  _prefs.setInt('streak_$level', _levelStreaks[level] ?? 0);
-  _prefs.setInt('hints_$level',  _levelHints[level]  ?? initHints);
+  _prefs.setInt('streak_$level',      _levelStreaks[level]     ?? 0);
+  _prefs.setInt('best_streak_$level', _levelBestStreaks[level] ?? 0);
+  _prefs.setInt('hints_$level',       _levelHints[level]      ?? initHints);
 }
 
 // Per-level streak and hint tracking (app-session scoped)
-final _levelStreaks = {3: 0, 4: 0, 5: 0, 6: 0};
-final _levelHints  = {3: initHints, 4: initHints, 5: initHints, 6: initHints};
+final _levelStreaks     = {3: 0, 4: 0, 5: 0, 6: 0};
+final _levelBestStreaks = {3: 0, 4: 0, 5: 0, 6: 0};
+final _levelHints      = {3: initHints, 4: initHints, 5: initHints, 6: initHints};
 
 // ── App ───────────────────────────────────────────────────────────────────────
 
@@ -74,6 +88,23 @@ class _LevelPageState extends State<_LevelPage> {
 
   Future<void> _loadAsync() async {
     setState(() => _loading = true);
+
+    final savedTarget  = _prefs.getInt('game_target_${widget.level}');
+    final savedHistory = _prefs.getString('game_history_${widget.level}');
+    if (savedTarget != null && savedHistory != null) {
+      final raw     = jsonDecode(savedHistory) as List;
+      final history = raw.map<List<int>>((e) => (e as List).map<int>((v) => v as int).toList()).toList();
+      if (!mounted) return;
+      setState(() {
+        _gs       = GameState.fromHistory(history: history, target: savedTarget);
+        _loading  = false;
+        _statusMsg  = '';
+        _statusColor = cText;
+        _finished = false;
+      });
+      return;
+    }
+
     late List<int> numbers;
     late int target;
     for (int attempt = 0; attempt < puzzleRetries; attempt++) {
@@ -83,9 +114,9 @@ class _LevelPageState extends State<_LevelPage> {
     markPuzzleSeen(numbers, target);
     if (!mounted) return;
     setState(() {
-      _gs = GameState(numbers: numbers, target: target);
-      _loading = false;
-      _statusMsg = '';
+      _gs       = GameState(numbers: numbers, target: target);
+      _loading  = false;
+      _statusMsg  = '';
       _statusColor = cText;
       _finished = false;
     });
@@ -107,9 +138,8 @@ class _LevelPageState extends State<_LevelPage> {
   }
 
   void _goHome() {
-    _saveLevel(widget.level);
-    _levelStreaks[widget.level] = 0;
-    _levelHints[widget.level] = initHints;
+    final gs = _gs;
+    if (gs != null && !_finished) _saveGame(widget.level, gs);
     resetSeenPuzzles();
     Navigator.pushReplacement(
       context,
@@ -154,21 +184,26 @@ class _LevelPageState extends State<_LevelPage> {
       _statusColor = cWin;
       _finished = true;
       _levelStreaks[widget.level] = _streak + 1;
+      _levelBestStreaks[widget.level] = max(_levelBestStreaks[widget.level] ?? 0, _streak + 1);
       _saveLevel(widget.level);
+      _clearSavedGame(widget.level);
       Future.delayed(nextLevelDelay, _nextLevel);
     } else if (gs.isFinished) {
       final diff = (gs.bestResult - gs.target).abs();
       _statusMsg = 'Solved with diff $diff — streak reset';
       _statusColor = cLose;
       _finished = true;
+      _levelBestStreaks[widget.level] = max(_levelBestStreaks[widget.level] ?? 0, _streak);
       _levelStreaks[widget.level] = 0;
       _levelHints[widget.level] = initHints;
       _saveLevel(widget.level);
+      _clearSavedGame(widget.level);
       Future.delayed(nextLevelDelay, _restart);
     }
   }
 
   void _onUndo() {
+    if (_finished) return;
     final gs = _gs;
     if (gs == null) return;
     setState(() {
@@ -700,7 +735,7 @@ class _StreaksScreen extends StatelessWidget {
           mainAxisAlignment: MainAxisAlignment.center,
           children: [3, 4, 5, 6].map((level) {
             final color = levelColors[level]!;
-            final streak = _levelStreaks[level] ?? 0;
+            final streak = _levelBestStreaks[level] ?? 0;
             return Padding(
               padding: const EdgeInsets.symmetric(vertical: 20),
               child: Row(
